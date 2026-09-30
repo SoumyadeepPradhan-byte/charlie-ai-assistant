@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Charlie</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="hud-shell">
+      <header class="topbar">
+        <div class="brand-wrap">
+          <span class="brand-dot"></span>
+          <span class="brand-text">Charlie</span>
+        </div>
+        <div class="status-pill" id="status-pill">Standby</div>
+      </header>
+
+      <main class="main-panel">
+        <section class="orb-panel">
+          <div class="orb-ring orb-outer"></div>
+          <div class="orb-ring orb-middle"></div>
+          <div class="orb-core" id="orb-core">
+            <div class="orb-glow"></div>
+          </div>
+          <div class="orb-visualizer" id="orb-visualizer">
+            <span></span><span></span><span></span><span></span><span></span>
+          </div>
+        </section>
+
+        <section class="console-panel">
+          <div class="console-header">
+            <span class="label">Audio Console</span>
+            <button id="wake-button">Wake Charlie</button>
+          </div>
+
+          <div id="transcript-box" class="transcript-box">
+            <p class="prompt">"Hey Charlie"</p>
+          </div>
+
+          <div class="controls-row">
+            <button id="listen-button">Listen</button>
+            <button id="speak-button">Speak</button>
+            <button id="system-button">System Status</button>
+          </div>
+
+          <div class="input-row">
+            <input id="command-input" type="text" placeholder="Ask Charlie something..." />
+            <button id="send-button">Send</button>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>
