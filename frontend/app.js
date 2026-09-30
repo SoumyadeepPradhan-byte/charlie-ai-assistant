@@ -1,271 +1,291 @@
-from __future__ import annotations
+:root {
+  --bg: #040812;
+  --bg-soft: #0d1524;
+  --panel: rgba(11, 19, 31, 0.82);
+  --line: rgba(118, 214, 255, 0.4);
+  --cyan: #7dd8ff;
+  --cyan-strong: #4bd3ff;
+  --text: #dfefff;
+  --muted: #a6b3c8;
+  --glow: rgba(83, 236, 255, 0.7);
+  --danger: #ff6b7a;
+}
 
-import os
-import platform
-import subprocess
-from datetime import datetime
-from typing import Any, Dict
+* { box-sizing: border-box; }
 
-import psutil
-import requests
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  background:
+    radial-gradient(circle at top, rgba(38, 79, 112, 0.6), transparent 30%),
+    linear-gradient(135deg, #02060d, var(--bg));
+  color: var(--text);
+  font-family: Inter, Segoe UI, sans-serif;
+}
 
-app = FastAPI(title="Charlie Core", version="0.1.0")
+.hud-shell {
+  width: min(1200px, 92vw);
+  border: 1px solid var(--line);
+  background: rgba(5, 12, 20, 0.8);
+  box-shadow: 0 0 20px rgba(69, 196, 255, 0.15), inset 0 0 30px rgba(90, 195, 255, 0.05);
+  border-radius: 28px;
+  overflow: hidden;
+}
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 20px 26px;
+  border-bottom: 1px solid rgba(125, 216, 255, 0.18);
+}
 
-ALLOWED_COMMANDS = [
-    "python",
-    "node",
-    "npm",
-    "pip",
-    "ls",
-    "pwd",
-    "whoami",
-    "uname",
-    "uptime",
-    "date",
-    "echo",
-    "open",
-    "start",
-    "xdg-open",
-]
+.brand-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
 
+.brand-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--cyan);
+  box-shadow: 0 0 12px var(--glow), 0 0 18px var(--glow);
+}
 
-class ListenRequest(BaseModel):
-    text: str | None = None
-    audio_url: str | None = None
-    wake_word: str = "Hey Charlie"
+.brand-text {
+  font-weight: 700;
+  color: var(--text);
+}
 
+.status-pill {
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--cyan);
+  background: rgba(18, 39, 54, 0.8);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
 
-class SpeakRequest(BaseModel):
-    text: str
+.main-panel {
+  display: grid;
+  grid-template-columns: 1.1fr 1fr;
+  min-height: 700px;
+}
 
+.orb-panel {
+  position: relative;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(135deg, rgba(9, 17, 28, 0.9), rgba(3, 8, 14, 0.9));
+}
 
-class ExecuteRequest(BaseModel):
-    command: str
-    timeout: int = 20
-    shell: bool = True
+.orb-core {
+  position: relative;
+  width: 250px;
+  height: 250px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: radial-gradient(circle at 35% 35%, rgba(161, 232, 255, 0.85), rgba(34, 117, 148, 0.5) 30%, rgba(8, 23, 33, 0.95) 75%);
+  box-shadow: 0 0 50px rgba(107, 228, 255, 0.25), inset 0 0 30px rgba(255,255,255,0.2);
+  transition: transform 0.4s ease, box-shadow 0.4s ease;
+  z-index: 2;
+}
 
+.orb-core.listening {
+  transform: scale(1.09);
+  box-shadow: 0 0 30px rgba(93, 227, 255, 0.6), 0 0 90px rgba(83, 236, 255, 0.3);
+}
 
-@app.get("/health")
-def health_check() -> Dict[str, Any]:
-    return {
-        "status": "online",
-        "assistant": "Charlie",
-        "timestamp": datetime.utcnow().isoformat() + "Z",
-    }
+.orb-core.speaking {
+  animation: pulse 1.2s infinite ease-in-out;
+}
 
+.orb-glow {
+  width: 150px;
+  height: 150px;
+  border-radius: 50%;
+  background: rgba(116, 219, 255, 0.18);
+  filter: blur(18px);
+}
 
-def stringify_result(value: Any) -> str:
-    if isinstance(value, str):
-        return value
-    if isinstance(value, dict):
-        if "status" in value and value.get("status") == "weather data retrieved":
-            temp = value.get("temperature_c")
-            return f"Charlie reports weather for {value.get('location', 'your area')}: {temp}°C with a current weather status from the local feed."
-        if "status" in value and value.get("status") == "weather lookup failed":
-            return "Charlie couldn’t fetch local weather right now, but the backend is online and ready to retry."
-        if "platform" in value and "cpu_percent" in value:
-            cpu = value.get("cpu_percent")
-            mem_percent = value.get("memory", {}).get("percent")
-            return f"Charlie reports system status: CPU at {cpu}% and memory usage at {mem_percent}%."
-        return str(value)
-    return str(value)
+.orb-ring {
+  position: absolute;
+  border-radius: 50%;
+  border: 1px solid rgba(117, 217, 255, 0.35);
+  animation: rotate 12s linear infinite;
+}
 
+.orb-outer {
+  width: 330px;
+  height: 330px;
+}
 
-@app.post("/api/listen")
-def api_listen(payload: ListenRequest) -> Dict[str, Any]:
-    transcript = (payload.text or payload.audio_url or "").strip()
-    if not transcript:
-        raise HTTPException(status_code=400, detail="No input was provided.")
+.orb-middle {
+  width: 430px;
+  height: 430px;
+  animation-direction: reverse;
+  animation-duration: 18s;
+}
 
-    command = transcript.lower()
-    result_value: Any = "Charlie is online and ready. I can handle weather, system metrics, browser automation, and note-taking."
+.orb-visualizer {
+  position: absolute;
+  bottom: 80px;
+  display: flex;
+  align-items: end;
+  gap: 8px;
+}
 
-    if "weather" in command:
-        result_value = get_weather_summary()
-    elif "system" in command or "metrics" in command:
-        result_value = get_system_metrics()
-    elif "note" in command:
-        result_value = save_note(transcript)
-    elif "open" in command and "browser" in command:
-        result_value = open_browser("https://www.google.com")
+.orb-visualizer span {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--cyan);
+  box-shadow: 0 0 12px var(--glow);
+  animation: bounce 1.2s ease-in-out infinite;
+}
 
-    response = {
-        "assistant": "Charlie",
-        "transcript": transcript,
-        "heard_wake_word": "hey charlie" in command,
-        "status": "processed",
-        "result": stringify_result(result_value),
-    }
+.orb-visualizer span:nth-child(2) { animation-delay: 0.15s; }
+.orb-visualizer span:nth-child(3) { animation-delay: 0.3s; }
+.orb-visualizer span:nth-child(4) { animation-delay: 0.45s; }
+.orb-visualizer span:nth-child(5) { animation-delay: 0.6s; }
 
-    if "weather" in command:
-        response["intent"] = "weather"
-    elif "system" in command or "metrics" in command:
-        response["intent"] = "system_metrics"
-    elif "note" in command:
-        response["intent"] = "note"
-    elif "open" in command and "browser" in command:
-        response["intent"] = "browser_open"
-    else:
-        response["intent"] = "general"
+.console-panel {
+  padding: 28px 26px;
+  border-left: 1px solid rgba(125, 216, 255, 0.18);
+  background: rgba(11, 17, 25, 0.95);
+}
 
-    return response
+.console-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 18px;
+}
 
+.label {
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
 
-@app.post("/api/speak")
-def api_speak(payload: SpeakRequest) -> Dict[str, Any]:
-    text = payload.text.strip()
-    if not text:
-        raise HTTPException(status_code=400, detail="Speech payload cannot be empty.")
+.metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(120px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
 
-    return {
-        "assistant": "Charlie",
-        "text": text,
-        "voice": "default",
-        "status": "ready_to_speak",
-        "response": f"Charlie says: {text}",
-    }
+.metric-card {
+  background: rgba(9, 18, 25, 0.9);
+  border: 1px solid rgba(125, 216, 255, 0.2);
+  border-radius: 14px;
+  padding: 12px;
+  min-height: 82px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
 
+.metric-label {
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
 
-@app.post("/api/execute")
-def api_execute(payload: ExecuteRequest) -> Dict[str, Any]:
-    command = payload.command.strip()
-    if not command:
-        raise HTTPException(status_code=400, detail="Command cannot be empty.")
+.metric-card strong {
+  margin-top: 8px;
+  font-size: 1.2rem;
+  color: var(--text);
+}
 
-    safe = False
-    for allowed in ALLOWED_COMMANDS:
-        if command.startswith(allowed):
-            safe = True
-            break
+button {
+  border: 1px solid rgba(125, 216, 255, 0.35);
+  background: rgba(15, 28, 35, 0.95);
+  color: var(--text);
+  padding: 10px 16px;
+  border-radius: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: 0.2s ease;
+}
 
-    if not safe:
-        raise HTTPException(status_code=403, detail="Command blocked by Charlie’s execution policy.")
+button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 0 15px rgba(88, 215, 255, 0.2);
+}
 
-    try:
-        result = subprocess.run(
-            command,
-            shell=payload.shell,
-            capture_output=True,
-            text=True,
-            timeout=payload.timeout,
-        )
-        return {
-            "assistant": "Charlie",
-            "command": command,
-            "exit_code": result.returncode,
-            "stdout": result.stdout,
-            "stderr": result.stderr,
-            "status": "completed",
-        }
-    except subprocess.TimeoutExpired:
-        raise HTTPException(status_code=504, detail="Command timed out while Charlie was executing it.")
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Execution failed: {str(exc)}")
+.transcript-box {
+  background: rgba(7, 14, 18, 0.9);
+  border: 1px solid rgba(125, 216, 255, 0.18);
+  border-radius: 16px;
+  min-height: 220px;
+  max-height: 260px;
+  padding: 18px;
+  margin-bottom: 18px;
+  overflow: auto;
+}
 
+.prompt {
+  margin: 0;
+  color: var(--cyan);
+  font-size: 1.1rem;
+}
 
-@app.get("/api/weather")
-def api_weather(city: str = "Boston") -> Dict[str, Any]:
-    return get_weather_summary(city=city)
+.controls-row,
+.input-row {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
 
+.input-row {
+  margin-top: 18px;
+}
 
-@app.get("/api/system")
-def api_system() -> Dict[str, Any]:
-    return get_system_metrics()
+.input-row input {
+  flex: 1;
+  border-radius: 12px;
+  border: 1px solid rgba(125, 216, 255, 0.2);
+  background: rgba(6, 13, 18, 0.9);
+  color: var(--text);
+  padding: 12px 14px;
+  outline: none;
+}
 
+@keyframes rotate {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
 
-@app.post("/api/notes")
-def api_note(content: str) -> Dict[str, Any]:
-    return {"assistant": "Charlie", "result": save_note(content)}
+@keyframes pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.08); }
+}
 
+@keyframes bounce {
+  0%, 100% { height: 8px; } 
+  50% { height: 60px; }
+}
 
-def get_system_metrics() -> Dict[str, Any]:
-    cpu = psutil.cpu_percent(interval=None)
-    memory = psutil.virtual_memory()
-    disk = psutil.disk_usage("/")
-    return {
-        "assistant": "Charlie",
-        "platform": platform.platform(),
-        "cpu_percent": cpu,
-        "memory": {
-            "total_gb": round(memory.total / (1024 ** 3), 2),
-            "used_gb": round(memory.used / (1024 ** 3), 2),
-            "percent": memory.percent,
-        },
-        "disk": {
-            "total_gb": round(disk.total / (1024 ** 3), 2),
-            "used_gb": round(disk.used / (1024 ** 3), 2),
-            "free_gb": round(disk.free / (1024 ** 3), 2),
-        },
-    }
+@media (max-width: 840px) {
+  .main-panel {
+    grid-template-columns: 1fr;
+  }
 
-
-def save_note(content: str) -> str:
-    note_dir = os.path.join(os.getcwd(), "notes")
-    os.makedirs(note_dir, exist_ok=True)
-    timestamp = datetime.utcnow().strftime("%Y-%m-%dT%H-%M-%SZ")
-    file_path = os.path.join(note_dir, f"note_{timestamp}.txt")
-    with open(file_path, "w", encoding="utf-8") as handle:
-        handle.write(content)
-    return f"Saved note to {file_path}"
-
-
-def open_browser(url: str) -> str:
-    try:
-        if platform.system() == "Windows":
-            os.startfile(url)
-        elif platform.system() == "Darwin":
-            subprocess.Popen(["open", url])
-        else:
-            subprocess.Popen(["xdg-open", url])
-        return f"Charlie opened the browser to {url}"
-    except Exception as exc:
-        return f"Charlie failed to open the browser: {exc}"
-
-
-def get_weather_summary(city: str = "Boston") -> Dict[str, Any]:
-    try:
-        api_url = "https://api.open-meteo.com/v1/forecast"
-        response = requests.get(
-            api_url,
-            params={
-                "latitude": 42.3601,
-                "longitude": -71.0589,
-                "current": "temperature_2m,weather_code",
-                "timezone": "auto",
-            },
-            timeout=10,
-        )
-        response.raise_for_status()
-        data = response.json()
-        current = data.get("current", {})
-        return {
-            "assistant": "Charlie",
-            "location": city,
-            "temperature_c": current.get("temperature_2m"),
-            "weather_code": current.get("weather_code"),
-            "status": "weather data retrieved",
-        }
-    except Exception as exc:
-        return {
-            "assistant": "Charlie",
-            "location": city,
-            "status": "weather lookup failed",
-            "error": str(exc),
-        }
-
-
-if __name__ == "__main__":
-    import uvicorn
-
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+  .console-panel {
+    border-left: none;
+    border-top: 1px solid rgba(125, 216, 255, 0.18);
+  }
+}

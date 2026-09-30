@@ -1,57 +1,389 @@
-<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Charlie</title>
-    <link rel="stylesheet" href="styles.css" />
-  </head>
-  <body>
-    <div class="hud-shell">
-      <header class="topbar">
-        <div class="brand-wrap">
-          <span class="brand-dot"></span>
-          <span class="brand-text">Charlie</span>
-        </div>
-        <div class="status-pill" id="status-pill">Standby</div>
-      </header>
+from __future__ import annotations
 
-      <main class="main-panel">
-        <section class="orb-panel">
-          <div class="orb-ring orb-outer"></div>
-          <div class="orb-ring orb-middle"></div>
-          <div class="orb-core" id="orb-core">
-            <div class="orb-glow"></div>
-          </div>
-          <div class="orb-visualizer" id="orb-visualizer">
-            <span></span><span></span><span></span><span></span><span></span>
-          </div>
-        </section>
+import json
+import os
+import platform
+import subprocess
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List
 
-        <section class="console-panel">
-          <div class="console-header">
-            <span class="label">Audio Console</span>
-            <button id="wake-button">Wake Charlie</button>
-          </div>
+import psutil
+import requests
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
-          <div id="transcript-box" class="transcript-box">
-            <p class="prompt">"Hey Charlie"</p>
-          </div>
+BASE_DIR = Path(__file__).resolve().parent.parent
+NOTES_DIR = BASE_DIR / "notes"
+TASKS_DIR = BASE_DIR / "tasks"
 
-          <div class="controls-row">
-            <button id="listen-button">Listen</button>
-            <button id="speak-button">Speak</button>
-            <button id="system-button">System Status</button>
-          </div>
+NOTES_DIR.mkdir(exist_ok=True, parents=True)
+TASKS_DIR.mkdir(exist_ok=True, parents=True)
 
-          <div class="input-row">
-            <input id="command-input" type="text" placeholder="Ask Charlie something..." />
-            <button id="send-button">Send</button>
-          </div>
-        </section>
-      </main>
-    </div>
+app = FastAPI(title="Charlie Core", version="1.1.0")
 
-    <script src="app.js"></script>
-  </body>
-</html>
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+ALLOWED_COMMANDS = [
+    "python",
+    "python3",
+    "node",
+    "npm",
+    "pip",
+    "pip3",
+    "ls",
+    "pwd",
+    "whoami",
+    "uname",
+    "uptime",
+    "date",
+    "echo",
+    "open",
+    "start",
+    "xdg-open",
+    "curl",
+]
+
+
+class ListenRequest(BaseModel):
+    text: str | None = None
+    audio_url: str | None = None
+    wake_word: str = "Hey Charlie"
+
+
+class SpeakRequest(BaseModel):
+    text: str
+
+
+class ExecuteRequest(BaseModel):
+    command: str
+    timeout: int = 20
+    shell: bool = True
+
+
+class NoteRequest(BaseModel):
+    content: str
+
+
+class TaskRequest(BaseModel):
+    title: str
+    description: str = ""
+
+
+@app.get("/health")
+def health_check() -> Dict[str, Any]:
+    return {
+        "status": "online",
+        "assistant": "Charlie",
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "version": "1.1.0",
+    }
+
+
+@app.get("/api/ready")
+def ready_check() -> Dict[str, Any]:
+    return health_check()
+
+
+def friendly_weather_text(value: Dict[str, Any]) -> str:
+    if value.get("status") == "weather lookup failed":
+        return "Charlie couldn't fetch the live local weather feed. The system is still online and ready to retry."
+    temp = value.get("temperature_c")
+    location = value.get("location", "your area")
+    if temp is None:
+        return f"Charlie checked the weather for {location}, but the live feed did not return a current temperature."
+    return f"Charlie reports {location} is currently around {temp}°C in the live weather feed."
+
+
+def friendly_system_text(value: Dict[str, Any]) -> str:
+    cpu = value.get("cpu_percent")
+    memory = value.get("memory", {})
+    mem_percent = memory.get("percent")
+    return f"Charlie reports system status: CPU at {cpu}% and memory at {mem_percent}% usage."
+
+
+def stringify_result(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        if value.get("status") == "weather data retrieved":
+            return friendly_weather_text(value)
+        if value.get("status") == "weather lookup failed":
+            return friendly_weather_text(value)
+        if "platform" in value and "cpu_percent" in value:
+            return friendly_system_text(value)
+        if "Saved note to" in str(value):
+            return value
+        if "Charlie opened the browser" in str(value):
+            return value
+        return "Charlie processed that request successfully."
+    return str(value)
+
+
+@app.post("/api/listen")
+def api_listen(payload: ListenRequest) -> Dict[str, Any]:
+    transcript = (payload.text or payload.audio_url or "").strip()
+    if not transcript:
+        raise HTTPException(status_code=400, detail="No input was provided.")
+
+    command = transcript.lower()
+    result_value: Any = "Charlie is online and ready. I can handle weather, system metrics, browser automation, note-taking, and task management."
+
+    if "weather" in command:
+        result_value = get_weather_summary()
+    elif "system" in command or "metrics" in command or "status" in command:
+        result_value = get_system_metrics()
+    elif "remember" in command or "note" in command:
+        note_text = transcript
+        for token in ["remember", "note", "save note", "take note", "write note"]:
+            note_text = note_text.lower().replace(token, "", 1)
+        cleaned = note_text.strip()
+        if not cleaned:
+            result_value = "Charlie is ready to take a note. Tell me what to remember."
+        else:
+            result_value = save_note(cleaned)
+    elif "open" in command and "browser" in command:
+        result_value = open_browser("https://www.google.com")
+    elif "goodbye" in command or "shutdown" in command or "sign off" in command:
+        result_value = "Charlie is signing off for now. I’ll be ready when you call again."
+    elif "task" in command:
+        result_value = "Charlie can manage tasks, but I’ll need a title and description before I add one."
+
+    response = {
+        "assistant": "Charlie",
+        "transcript": transcript,
+        "heard_wake_word": "hey charlie" in command,
+        "status": "processed",
+        "result": stringify_result(result_value),
+    }
+
+    if "weather" in command:
+        response["intent"] = "weather"
+    elif "system" in command or "metrics" in command or "status" in command:
+        response["intent"] = "system_metrics"
+    elif "remember" in command or "note" in command:
+        response["intent"] = "note"
+    elif "open" in command and "browser" in command:
+        response["intent"] = "browser_open"
+    elif "goodbye" in command or "shutdown" in command or "sign off" in command:
+        response["intent"] = "shutdown"
+    elif "task" in command:
+        response["intent"] = "task_management"
+    else:
+        response["intent"] = "general"
+
+    return response
+
+
+@app.post("/api/speak")
+def api_speak(payload: SpeakRequest) -> Dict[str, Any]:
+    text = payload.text.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Speech payload cannot be empty.")
+
+    return {
+        "assistant": "Charlie",
+        "text": text,
+        "voice": "default",
+        "status": "ready_to_speak",
+        "response": f"Charlie says: {text}",
+    }
+
+
+@app.post("/api/execute")
+def api_execute(payload: ExecuteRequest) -> Dict[str, Any]:
+    command = payload.command.strip()
+    if not command:
+        raise HTTPException(status_code=400, detail="Command cannot be empty.")
+
+    safe = False
+    for allowed in ALLOWED_COMMANDS:
+        if command.startswith(allowed):
+            safe = True
+            break
+
+    if not safe:
+        raise HTTPException(status_code=403, detail="Command blocked by Charlie’s execution policy.")
+
+    try:
+        result = subprocess.run(
+            command,
+            shell=payload.shell,
+            capture_output=True,
+            text=True,
+            timeout=payload.timeout,
+        )
+        return {
+            "assistant": "Charlie",
+            "command": command,
+            "exit_code": result.returncode,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "status": "completed",
+        }
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=504, detail="Command timed out while Charlie was executing it.")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Execution failed: {str(exc)}")
+
+
+@app.get("/api/weather")
+def api_weather(city: str = "Boston") -> Dict[str, Any]:
+    return get_weather_summary(city=city)
+
+
+@app.get("/api/system")
+def api_system() -> Dict[str, Any]:
+    return get_system_metrics()
+
+
+@app.get("/api/metrics")
+def api_metrics() -> Dict[str, Any]:
+    return get_system_metrics()
+
+
+@app.post("/api/notes")
+def api_note(payload: NoteRequest) -> Dict[str, Any]:
+    text = payload.content.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Note content cannot be empty.")
+    return {"assistant": "Charlie", "result": save_note(text)}
+
+
+@app.get("/api/notes")
+def list_notes() -> Dict[str, Any]:
+    files = sorted(NOTES_DIR.glob("*.txt"))
+    return {
+        "assistant": "Charlie",
+        "count": len(files),
+        "notes": [file.name for file in files],
+    }
+
+
+@app.post("/api/tasks")
+def create_task(payload: TaskRequest) -> Dict[str, Any]:
+    title = payload.title.strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Task title cannot be empty.")
+
+    task_id = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    task = {
+        "id": task_id,
+        "title": title,
+        "description": payload.description.strip(),
+        "created_at": datetime.utcnow().isoformat() + "Z",
+    }
+
+    task_path = TASKS_DIR / f"task_{task_id}.json"
+    with open(task_path, "w", encoding="utf-8") as handle:
+        json.dump(task, handle, indent=2)
+
+    return {"assistant": "Charlie", "status": "task_created", "task": task}
+
+
+@app.get("/api/tasks")
+def list_tasks() -> Dict[str, Any]:
+    files = sorted(TASKS_DIR.glob("*.json"))
+    tasks: List[Dict[str, Any]] = []
+    for file in files:
+        with open(file, "r", encoding="utf-8") as handle:
+            tasks.append(json.load(handle))
+    return {"assistant": "Charlie", "count": len(tasks), "tasks": tasks}
+
+
+def get_system_metrics() -> Dict[str, Any]:
+    cpu = psutil.cpu_percent(interval=None)
+    memory = psutil.virtual_memory()
+    disk = psutil.disk_usage("/")
+    boot_time = psutil.boot_time()
+    uptime_seconds = max(0.0, datetime.utcnow().timestamp() - boot_time)
+    return {
+        "assistant": "Charlie",
+        "platform": platform.platform(),
+        "cpu_percent": cpu,
+        "uptime_seconds": round(uptime_seconds, 2),
+        "memory": {
+            "total_gb": round(memory.total / (1024 ** 3), 2),
+            "used_gb": round(memory.used / (1024 ** 3), 2),
+            "percent": memory.percent,
+        },
+        "disk": {
+            "total_gb": round(disk.total / (1024 ** 3), 2),
+            "used_gb": round(disk.used / (1024 ** 3), 2),
+            "free_gb": round(disk.free / (1024 ** 3), 2),
+        },
+    }
+
+
+def save_note(content: str) -> str:
+    timestamp = datetime.utcnow().strftime("%Y-%m-%dT%H-%M-%SZ")
+    file_path = NOTES_DIR / f"note_{timestamp}.txt"
+    with open(file_path, "w", encoding="utf-8") as handle:
+        handle.write(content)
+    return f"Saved note to {file_path}"
+
+
+def open_browser(url: str) -> str:
+    try:
+        if platform.system() == "Windows":
+            os.startfile(url)
+        elif platform.system() == "Darwin":
+            subprocess.Popen(["open", url])
+        else:
+            subprocess.Popen(["xdg-open", url])
+        return f"Charlie opened the browser to {url}"
+    except Exception as exc:
+        return f"Charlie failed to open the browser: {exc}"
+
+
+def get_weather_summary(city: str = "Boston") -> Dict[str, Any]:
+    try:
+        api_url = "https://api.open-meteo.com/v1/forecast"
+        response = requests.get(
+            api_url,
+            params={
+                "latitude": 42.3601,
+                "longitude": -71.0589,
+                "current": "temperature_2m,weather_code",
+                "timezone": "auto",
+            },
+            timeout=10,
+        )
+        response.raise_for_status()
+        data = response.json()
+        current = data.get("current", {})
+        return {
+            "assistant": "Charlie",
+            "location": city,
+            "temperature_c": current.get("temperature_2m"),
+            "weather_code": current.get("weather_code"),
+            "status": "weather data retrieved",
+        }
+    except Exception as exc:
+        return {
+            "assistant": "Charlie",
+            "location": city,
+            "status": "weather lookup failed",
+            "error": str(exc),
+        }
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+
+
+# --- Advanced Charlie notes ---
+# - dedicated notes and tasks folders
+# - all voice actions route through a friendly, conversational response layer
+# - system status is now more descriptive and task-ready
+# - memory persists locally in the repository workspace
+# - safe execution remains allowlist constrained
