@@ -1,250 +1,172 @@
-from __future__ import annotations
+const backendBase = 'http://localhost:8000';
+const orbCore = document.getElementById('orb-core');
+const statusPill = document.getElementById('status-pill');
+const transcriptBox = document.getElementById('transcript-box');
+const commandInput = document.getElementById('command-input');
+const wakeButton = document.getElementById('wake-button');
+const listenButton = document.getElementById('listen-button');
+const speakButton = document.getElementById('speak-button');
+const systemButton = document.getElementById('system-button');
+const sendButton = document.getElementById('send-button');
 
-import os
-import platform
-import shutil
-import subprocess
-import time
-from datetime import datetime
-from typing import Any, Dict, List
+let recognition = null;
 
-import psutil
-import requests
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+function setStatus(text) {
+  statusPill.textContent = text;
+}
 
-app = FastAPI(title="Charlie Core", version="0.1.0")
+function addLine(text, type = 'system') {
+  const p = document.createElement('p');
+  p.className = 'prompt';
+  p.textContent = type === 'user' ? `You: ${text}` : text;
+  transcriptBox.appendChild(p);
+  transcriptBox.scrollTop = transcriptBox.scrollHeight;
+}
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+function setOrbState(state) {
+  orbCore.classList.remove('listening', 'speaking');
+  if (state === 'listening') orbCore.classList.add('listening');
+  if (state === 'speaking') orbCore.classList.add('speaking');
+}
 
-ALLOWED_COMMANDS = [
-    "python",
-    "node",
-    "npm",
-    "pip",
-    "ls",
-    "pwd",
-    "whoami",
-    "uname",
-    "uptime",
-    "date",
-    "echo",
-    "open",
-    "start",
-    "xdg-open",
-]
+async function callAssistant(endpoint, payload) {
+  const response = await fetch(`${backendBase}${endpoint}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
 
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail || 'Charlie failed to respond.');
+  }
 
-class ListenRequest(BaseModel):
-    text: str | None = None
-    audio_url: str | None = None
-    wake_word: str = "Hey Charlie"
+  return response.json();
+}
 
+async function sendTextCommand(text) {
+  addLine(text, 'user');
+  setStatus('Processing');
+  setOrbState('listening');
 
-class SpeakRequest(BaseModel):
-    text: str
+  try {
+    const result = await callAssistant('/api/listen', { text });
+    const responseText = typeof result.result === 'string' ? result.result : JSON.stringify(result.result);
+    addLine(`Charlie: ${responseText}`);
+    setStatus('Ready');
+    setOrbState('speaking');
+    await speakText(responseText);
+  } catch (err) {
+    addLine(`Charlie: ${err.message}`);
+    setStatus('Alert');
+  } finally {
+    setOrbState('');
+  }
+}
 
+function speakText(text) {
+  if ('speechSynthesis' in window) {
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = 1;
+    utterance.pitch = 1.1;
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(utterance);
+  }
+  return Promise.resolve();
+}
 
-class ExecuteRequest(BaseModel):
-    command: str
-    timeout: int = 20
-    shell: bool = True
+function initializeSpeechRecognition() {
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) {
+    addLine('Charlie: Browser voice recognition is unavailable in this environment. Use the text field to continue.');
+    return;
+  }
 
+  recognition = new SpeechRecognition();
+  recognition.continuous = false;
+  recognition.lang = 'en-US';
 
-@app.get("/health")
-def health_check() -> Dict[str, Any]:
-    return {
-        "status": "online",
-        "assistant": "Charlie",
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+  recognition.onstart = () => {
+    setStatus('Listening');
+    setOrbState('listening');
+    addLine('Charlie: Listening for your command.');
+  };
+
+  recognition.onresult = (event) => {
+    const transcript = event.results[0][0].transcript;
+    addLine(transcript, 'user');
+    const lower = transcript.toLowerCase();
+    if (lower.includes('hey charlie')) {
+      const cleaned = transcript.replace(/hey charlie/gi, '').trim();
+      if (cleaned) {
+        sendTextCommand(cleaned);
+      } else {
+        addLine('Charlie: I’m ready for your next command.');
+      }
+    } else {
+      sendTextCommand(transcript);
     }
+  };
 
+  recognition.onerror = (event) => {
+    addLine(`Charlie: Voice capture error: ${event.error}`);
+    setStatus('Standby');
+    setOrbState('');
+  };
 
-@app.post("/api/listen")
-def api_listen(payload: ListenRequest) -> Dict[str, Any]:
-    transcript = (payload.text or payload.audio_url or "").strip()
-    if not transcript:
-        raise HTTPException(status_code=400, detail="No input was provided.")
+  recognition.onend = () => {
+    setStatus('Ready');
+    setOrbState('');
+  };
+}
 
-    command = transcript.lower()
-    response = {
-        "assistant": "Charlie",
-        "transcript": transcript,
-        "heard_wake_word": "hey charlie" in command,
-        "status": "processed",
+wakeButton.addEventListener('click', () => {
+  addLine('Charlie: Wake phrase detected. "Hey Charlie"');
+  setStatus('Listening');
+  setOrbState('listening');
+  setTimeout(() => setOrbState(''), 1200);
+});
+
+listenButton.addEventListener('click', () => {
+  if (!recognition) initializeSpeechRecognition();
+  if (recognition) recognition.start();
+});
+
+speakButton.addEventListener('click', () => {
+  const text = commandInput.value.trim() || 'Charlie is online and ready.';
+  speakText(text);
+  addLine(`Charlie: ${text}`);
+});
+
+systemButton.addEventListener('click', async () => {
+  try {
+    const result = await fetch(`${backendBase}/api/system`);
+    const data = await result.json();
+    addLine(`Charlie: ${JSON.stringify(data)}`);
+  } catch (err) {
+    addLine(`Charlie: ${err.message}`);
+  }
+});
+
+sendButton.addEventListener('click', () => {
+  const text = commandInput.value.trim();
+  if (text) {
+    sendTextCommand(text);
+    commandInput.value = '';
+  }
+});
+
+commandInput.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    const text = commandInput.value.trim();
+    if (text) {
+      sendTextCommand(text);
+      commandInput.value = '';
     }
+  }
+});
 
-    if "weather" in command:
-        response["intent"] = "weather"
-        response["result"] = get_weather_summary()
-    elif "system" in command or "metrics" in command:
-        response["intent"] = "system_metrics"
-        response["result"] = get_system_metrics()
-    elif "note" in command:
-        response["intent"] = "note"
-        response["result"] = save_note(transcript)
-    elif "open" in command and "browser" in command:
-        response["intent"] = "browser_open"
-        response["result"] = open_browser("https://www.google.com")
-    else:
-        response["intent"] = "general"
-        response["result"] = "Charlie is online and ready. I can handle weather, system metrics, browser automation, and note-taking."
-
-    return response
-
-
-@app.post("/api/speak")
-def api_speak(payload: SpeakRequest) -> Dict[str, Any]:
-    text = payload.text.strip()
-    if not text:
-        raise HTTPException(status_code=400, detail="Speech payload cannot be empty.")
-
-    return {
-        "assistant": "Charlie",
-        "text": text,
-        "voice": "default",
-        "status": "ready_to_speak",
-        "response": f"Charlie says: {text}",
-    }
-
-
-@app.post("/api/execute")
-def api_execute(payload: ExecuteRequest) -> Dict[str, Any]:
-    command = payload.command.strip()
-    if not command:
-        raise HTTPException(status_code=400, detail="Command cannot be empty.")
-
-    safe = False
-    for allowed in ALLOWED_COMMANDS:
-        if command.startswith(allowed):
-            safe = True
-            break
-
-    if not safe:
-        raise HTTPException(status_code=403, detail="Command blocked by Charlie’s execution policy.")
-
-    try:
-        result = subprocess.run(
-            command,
-            shell=payload.shell,
-            capture_output=True,
-            text=True,
-            timeout=payload.timeout,
-        )
-        return {
-            "assistant": "Charlie",
-            "command": command,
-            "exit_code": result.returncode,
-            "stdout": result.stdout,
-            "stderr": result.stderr,
-            "status": "completed",
-        }
-    except subprocess.TimeoutExpired:
-        raise HTTPException(status_code=504, detail="Command timed out while Charlie was executing it.")
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Execution failed: {str(exc)}")
-
-
-@app.get("/api/weather")
-def api_weather(city: str = "Boston") -> Dict[str, Any]:
-    return get_weather_summary(city=city)
-
-
-@app.get("/api/system")
-def api_system() -> Dict[str, Any]:
-    return get_system_metrics()
-
-
-@app.post("/api/notes")
-def api_note(content: str) -> Dict[str, Any]:
-    return {"assistant": "Charlie", "result": save_note(content)}
-
-
-def get_system_metrics() -> Dict[str, Any]:
-    cpu = psutil.cpu_percent(interval=None)
-    memory = psutil.virtual_memory()
-    disk = psutil.disk_usage("/")
-    return {
-        "assistant": "Charlie",
-        "platform": platform.platform(),
-        "cpu_percent": cpu,
-        "memory": {
-            "total_gb": round(memory.total / (1024 ** 3), 2),
-            "used_gb": round(memory.used / (1024 ** 3), 2),
-            "percent": memory.percent,
-        },
-        "disk": {
-            "total_gb": round(disk.total / (1024 ** 3), 2),
-            "used_gb": round(disk.used / (1024 ** 3), 2),
-            "free_gb": round(disk.free / (1024 ** 3), 2),
-        },
-    }
-
-
-def save_note(content: str) -> str:
-    note_dir = os.path.join(os.getcwd(), "notes")
-    os.makedirs(note_dir, exist_ok=True)
-    timestamp = datetime.utcnow().strftime("%Y-%m-%dT%H-%M-%SZ")
-    file_path = os.path.join(note_dir, f"note_{timestamp}.txt")
-    with open(file_path, "w", encoding="utf-8") as handle:
-        handle.write(content)
-    return f"Saved note to {file_path}"
-
-
-def open_browser(url: str) -> str:
-    try:
-        if platform.system() == "Windows":
-            os.startfile(url)
-        elif platform.system() == "Darwin":
-            subprocess.Popen(["open", url])
-        else:
-            subprocess.Popen(["xdg-open", url])
-        return f"Charlie opened the browser to {url}"
-    except Exception as exc:
-        return f"Charlie failed to open the browser: {exc}"
-
-
-def get_weather_summary(city: str = "Boston") -> Dict[str, Any]:
-    try:
-        # Use a free endpoint with no API key for local testing.
-        api_url = "https://api.open-meteo.com/v1/forecast"
-        response = requests.get(
-            api_url,
-            params={
-                "latitude": 42.3601,
-                "longitude": -71.0589,
-                "current": "temperature_2m,weather_code",
-                "timezone": "auto",
-            },
-            timeout=10,
-        )
-        response.raise_for_status()
-        data = response.json()
-        current = data.get("current", {})
-        return {
-            "assistant": "Charlie",
-            "location": city,
-            "temperature_c": current.get("temperature_2m"),
-            "weather_code": current.get("weather_code"),
-            "status": "weather data retrieved",
-        }
-    except Exception as exc:
-        return {
-            "assistant": "Charlie",
-            "location": city,
-            "status": "weather lookup failed",
-            "error": str(exc),
-        }
-
-
-if __name__ == "__main__":
-    import uvicorn
-
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+initializeSpeechRecognition();
+setStatus('Standby');
